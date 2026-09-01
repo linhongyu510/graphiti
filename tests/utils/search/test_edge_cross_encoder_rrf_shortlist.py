@@ -121,3 +121,39 @@ async def test_smoke_alice_works_at_zep_reaches_cross_encoder(monkeypatch):
     assert edges[0].fact == 'Alice works at Zep'
     assert len(edges) == limit
     assert len(scores) == limit
+
+
+@pytest.mark.asyncio
+async def test_cross_encoder_preserves_edges_with_duplicate_facts(monkeypatch):
+    duplicate_fact = 'Alice knows Bob'
+    first_edge = _edge('edge-1', duplicate_fact)
+    second_edge = _edge('edge-2', duplicate_fact)
+    ranked_passages: list[str] = []
+
+    async def fake_fulltext(*args, **kwargs):
+        return [first_edge, second_edge]
+
+    class RecordingCrossEncoder:
+        async def rank(self, query: str, passages: list[str]):
+            ranked_passages.extend(passages)
+            return [(passage, 0.9) for passage in dict.fromkeys(passages)]
+
+    monkeypatch.setattr('graphiti_core.search.search.edge_fulltext_search', fake_fulltext)
+
+    edges, scores = await edge_search(
+        driver=SimpleNamespace(),
+        cross_encoder=RecordingCrossEncoder(),
+        query='Who knows Bob?',
+        query_vector=[0.1, 0.2, 0.3],
+        group_ids=None,
+        config=EdgeSearchConfig(
+            search_methods=[EdgeSearchMethod.bm25],
+            reranker=EdgeReranker.cross_encoder,
+        ),
+        search_filter=SearchFilters(),
+        limit=2,
+    )
+
+    assert ranked_passages == [duplicate_fact]
+    assert [edge.uuid for edge in edges] == ['edge-1', 'edge-2']
+    assert scores == [0.9, 0.9]
